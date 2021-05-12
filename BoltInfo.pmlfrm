@@ -1,0 +1,575 @@
+import 'GridControl'
+handle any
+	--$P Unable to init GridControl
+endhandle
+import 'PMLFileBrowser'
+handle any
+	--$P Unable to init FileBrowser
+endhandle
+
+setup form !!BoltInfo dialog dock right
+	title 'CE Bolting Info'
+	frame .frameButtons ''
+		text .textCE '' tooltip 'CE reference number' width 50 STRING
+		path right
+		hdist 1	
+		button .buttonCE 'CE' tooltip 'Calculate bolting data for CE' callback '!this.createReport()'
+		path right
+		hdist 1
+		button .buttonExport 'EX' tooltip 'Export bolting data to MS Excel' callback '!this.exportToExcel()'
+	exit
+	path down
+	vdist 1
+	using namespace 'Aveva.Pdms.Presentation'
+	member .grid is NetGridControl	
+	path down
+	container .gridFrame PmlNetControl 'grid' anchor all at xmin ymax width.frameButtons height 30	
+	member .studs is Array
+	member .bxlen is Array
+exit
+
+-- конструктор формы
+define method .BoltInfo()
+	!this.textCE.val = ''	
+	!this.textCE.Editable = FALSE	
+	using namespace 'Aveva.Pdms.Presentation'
+	!this.grid = object NetGridControl()
+	!this.gridFrame.control = !this.grid.handle()	
+	!this.grid.ColumnExcelFilter(TRUE)
+	!this.grid.setNameColumnImage()
+	!this.grid.OutlookGroupStyle(TRUE)
+	!this.grid.FixedHeaders(FALSE)
+	!this.grid.FixedRows(FALSE)
+	!this.grid.ColumnSummaries(TRUE)
+	!this.grid.EditableGrid(TRUE)		
+	!this.buttonCE.SetFocus()
+	-- чтение коэффициентов дополнительной длины болта/шпильки
+	var !fileNameOut evar |DFLTS_NET|
+	handle (2,113)
+		!Alert.Warning('Not found evar DFLTS_NET')		
+		return
+	endhandle		
+	!fileNameBXL = !fileNameOut + 'BoltsExtraLengths.txt'
+	!fileBXL = object FILE (!fileNameBXL)
+	!this.bxlen = !fileBXL.Readfile()		
+	!fileBXL.Close ()
+endmethod
+
+-- Описание шпильки/гайки. Берётся из спецификации болтов
+define method .getBoltDesc(!bDiam is String, !bSel is String, !bCount is Real, !prevLen is Real)
+	!me = !!ce	
+	!preLen = !this.getBitemLength(!bDiam)	
+	!preLen = $!preLen + $!prevLen	
+	!diam = !bDiam
+	!diam = !diam.Replace('( ','')
+	handle any
+	endhandle
+	!diam = !diam.Replace(' )','')
+	handle any
+	endhandle
+	!diam = !diam + 'mm'
+	handle any
+	endhandle
+	var !sp collect all SPEC with (Tdefault eq 'BOLT')
+	do !spIndex from 1 to !sp.Size()
+		!!ce = $!sp[$!spIndex]		
+		var !sl collect all SELE for ce
+		do !slIndex from 1 to !sl.Size()
+			!!ce = $!sl[$!slIndex]
+			skip if String(!!ce.Answer) neq !diam
+			var !st collect all SELE for ce
+			do !stIndex from 1 to !st.Size()
+				!!ce = $!st[$!stIndex]
+				skip if !!ce.Question neq 'BSEL'
+				!tp = !!ce.Tanswer
+				var !sh collect all SELE for ce
+				do !shIndex from 1 to !sh.Size()
+					!!ce = $!sh[$!shIndex]
+					skip if !!ce.Tanswer neq !bSel
+					var !spc collect all SPCO for ce
+					do !spcIndex from 1 to !spc.Size()
+						!!ce = $!spc[$!spcIndex]						
+						!desc = !!ce.Comment
+						if !tp eq 'BOLT' then
+							!len = !this.calcBlen(!diam, !preLen)							
+							!desc = !desc.Replace('LenBLT', '$!len')
+							!desc = !desc.Replace('mm', '')
+						endif						
+						!count = $!bCount
+						if !tp eq 'NUT' then
+							!count = $!bCount * 2
+						endif
+						!this.addBoltItem(!count, !desc)
+					enddo
+				enddo
+			enddo
+		enddo
+	enddo
+	!!ce = !me
+endmethod
+
+define method .exportToExcel()	
+	!fileName = !!ce.Name + '-bolting'
+	!fileName = !fileName.Replace('\','')
+	using namespace 'Aveva.Pdms.Presentation'
+	!browser = object PMLFileBrowser('SAVE')
+	!browser.show('C:\',!fileName,'Save Grid to Excel',false, 'Excel Documents|*.xls',1)
+	!this.grid.SaveGridToExcel(!browser.file())			
+endmethod
+
+define method .createReport()
+	--!this.textCE.val = !!ce.RefNo.String()
+	!this.FormTitle = 'Bolting of ' + !!ce.Name	
+	!this.studs.Clear()
+	!this.BoltingMethod()
+	if !this.studs.Empty() then		
+		!this.studs[1][1] = ''
+		!this.studs[1][2] = ''
+	endif
+	!headings = Array()
+	!headings.Append('Count')
+	!headings.Append('Description')
+	!fileName = !!ce.Name + '-bolting'
+	using namespace 'Aveva.Pdms.Presentation'
+	!nds = object NetDataSource(!fileName, !headings, !this.studs)
+	!this.grid.BindToDataSource(!nds)
+endmethod
+
+define method .isFlanPcon(!ref is DBREF) is boolean
+	!me = !!ce
+	!!ce = !ref	
+    !attribute = 'P1CON'
+    if !attribute.Unset() then
+        return false
+    else                    
+		!attribute = !attribute.Trim()            
+        var !value $!attribute            
+        handle any
+            !value = 'UNSET'
+        endhandle
+		!value = !value.substring(1, 1)
+		if !value eq 'F' or !value eq 'L' then
+			return true
+		endif		
+    endif
+	!!ce = !me
+	return false
+endmethod
+
+define method .ceBtth() is Real
+	!locBoltTH = RPRO BTTH
+	return !locBoltTH
+endmethod
+
+define method .getBtth(!ref is DBREF) is Real	
+	!me = !!ce	
+	!ind = 0
+	!res = object real()
+	!formula = object Array()
+	!!ce = !ref	
+	!res = !!ce.Param[5]
+	handle any
+		!res = 0
+		!!ce = !me
+		return !res
+	endhandle
+	!!ce = !!ce.Spref
+	handle any
+		!res = 0
+		!!ce = !me
+		return !res
+	endhandle
+	!!ce = !!ce.Catref
+	handle any
+		!res = 0
+		!!ce = !me
+		return !res
+	endhandle
+	!!ce = !!ce.Dtref
+	handle any
+		!res = 0
+		!!ce = !me
+		return !res
+	endhandle
+	var !dt collect all DATA for ce
+	!dts = !dt.Size()
+	if !dts eq 0 then		
+		!!ce = !me
+		return !res
+	endif
+	do !i from 1 to !dt.Size()
+		!!ce = $!dt[$!i]
+		if !!ce.Dkey eq 'BTTH' then
+			!ind = $!i
+			!indf = 0
+			!str = !!ce.Pproperty
+			!arr = !str.split()
+			!tmp = object string()
+			do !j from 1 to !arr.size()
+				!tmp = !arr[$!j]
+				if !tmp.occurs('PARA[') gt 0 then
+					!tmp = !tmp.replace('PARA[', '')
+					!indf = $!indf + 1
+					!pind = !tmp.real()
+					!!ce = !me
+					!!ce = !!ce.Spref	
+					!!ce = !!ce.Catref				
+					!formula[$!indf] = !!ce.Param[$!pind]
+					skip
+				endif
+				if !tmp.occurs('DESP[') gt 0 then
+					!tmp = !tmp.replace('DESP[', '')
+					!indf = $!indf + 1
+					!pind = !tmp.real()
+					!!ce = !me
+					!!ce = !!ce.Spref	
+					!!ce = !!ce.Catref				
+					!formula[$!indf] = !!ce.Desparam[$!pind]					
+					skip
+				endif				
+				!dig = !tmp.VValue()
+				handle any
+					if !tmp eq '+' or !tmp eq '-' or !tmp eq '/' or !tmp eq '*' then
+						!indf = $!indf + 1
+						!formula[$!indf] = !tmp
+						skip
+					endif
+					skip
+				endhandle
+				!formula[$!indf] = $!dig				
+			enddo
+			break
+		endif	
+	enddo	
+	if !ind neq 0 then
+		if !formula.size() eq 1 then
+			!res = $!formula[1]
+		else
+			if !formula[2] eq '+' then
+				!res = $!formula[1] + $!formula[3]
+			endif
+			if !formula[2] eq '-' then
+				!res = $!formula[1] - $!formula[3]
+			endif
+			if !formula[2] eq '*' then
+				!res = $!formula[1] * $!formula[3]
+			endif
+			if !formula[2] eq '/' then
+				!res = $!formula[1] / $!formula[3]
+			endif
+		endif
+	else
+		!res = 0
+	endif
+	!!ce = !me
+	return !res
+endmethod
+
+define method .getBoltRef(!ref is dbref) is String
+	!me = !!ce
+	!!ce = !ref
+	!!ce = !!ce.Spref
+	handle any
+		return ''
+	endhandle
+	!!ce = !!ce.Catref
+	handle any
+		return ''
+	endhandle
+	!blt = !!ce.Blrfarray[1]
+	handle any
+		!!ce = !me
+		return ''
+	endhandle
+	!!ce = !me
+	return !blt.String()
+endmethod
+
+define method .isGF(!ref is dbref) is boolean
+	!me = !!ce
+	!!ce = !ref
+	!res = false
+	if !!ce.Type eq 'GASK' or !this.isFlan(!!ce) eq true then
+		!res = true
+	endif
+	!!ce = !me
+	return !res
+endmethod
+
+define method .isFlan(!ref is DBREF) is Boolean
+	!res = false	
+	!me = !!ce
+	!!ce = !ref	
+	!!ce = !!ce.Spref
+	handle any
+		!!ce = !me		
+		return !res
+	endhandle
+	!!ce = !!ce.Catref
+	handle any
+		!!ce = !me		
+		return !res
+	endhandle
+	if ( !!ce.Blrfarray.Size() gt 0 ) and ( !this.isFlanPcon(!ref) eq false ) then
+		!res = true
+	endif
+	!!ce = !me
+	return !res
+endmethod
+
+define method .isMto(!ref is dbref) is boolean
+	!me = !!ce
+	!!ce = !ref
+	!value = !!ce.Mtocomponent
+	handle any
+		!!ce = !me
+		return false
+	endhandle
+	!!ce = !me
+	if !value eq 'OFF' then				
+		return false
+	else
+		return true
+	endif	
+endmethod
+
+define method .BoltingMethod()	
+	!me = !!ce	
+	var !mainItem collect all BRAN for ce
+	do !mainItemIndex from 1 to !mainItem.Size()
+		!!ce = $!mainItem[$!mainItemIndex]		
+		var !item collect all with (type neq 'BRAN') for ce
+		do !i from 1 to !item.Size()
+			!!ce = $!item[$!i]
+			skip if !!ce.type neq 'FLAN' and !!ce.type neq 'FBLI'
+			skip if !this.isMto(!!ce) eq false
+			--!blt = !this.getBoltRef(!!ce)
+			!len = !this.getBtth(!!ce)	
+			!elen = 0
+			!onlyGask = false
+			!chain = !!ce.type
+			-- проверяем предыдущие элементы			
+			!index = $!i - 1	
+			if !index gt 0 then
+				!!ce = $!item[$!index]
+				if !this.isGF(!!ce) then					
+					!elen = $!elen + !this.getBtth(!!ce)
+					!onlyGask = true
+					!chain = !chain & ' << ' & !!ce.type
+					do !x
+						!index = $!index - 1
+						if !index lt 1 then
+							break
+						endif
+						!!ce = $!item[$!index]
+						!fp = !this.isFlanPcon(!!ce)
+						!gf = !this.isGF(!!ce)
+						if !fp or !gf then				
+							!elen = $!elen + !this.getBtth(!!ce)
+							!chain = !chain & ' << ' & !!ce.type
+							!onlyGask = false							
+							if !fp then
+								-- если соединение - фланцевая пара, то его обрабатывать не нужно
+								if !!ce.type eq 'FLAN' or !!ce.type eq 'FBLI' then
+									!elen = 0
+								endif
+								break
+							endif
+						endif
+					enddo
+				endif
+			endif
+						
+			if !onlyGask then
+				!elen = $!elen + $!len
+			endif
+
+			if !elen gt 0 then			
+				!!ce = $!item[$!i]
+				!len = $!len + $!elen
+				!this.getBolting(!!ce, !len)
+				--$P $!chain
+				skip
+			endif			
+			
+			!elen = 0
+			!onlyGask = false
+			-- проверяем следующие элементы
+			!index = $!i + 1
+			if ( !index lt !item.Size() ) or ( !index eq !item.Size() ) then
+				!!ce = $!item[$!index]
+				if !this.isGF(!!ce) then
+					!elen = $!elen + !this.getBtth(!!ce)						
+					!onlyGask = true					
+					!chain = !chain & ' >> ' & !!ce.type
+					do !x
+						!index = $!index + 1
+						if !index gt !item.Size() then
+							break
+						endif
+						!!ce = $!item[$!index]
+						!fp = !this.isFlanPcon(!!ce)
+						!gf = !this.isGF(!!ce)
+						if !fp or !gf then				
+							!elen = $!elen + !this.getBtth(!!ce)
+							!chain = !chain & ' >> ' & !!ce.type							
+							!onlyGask = false							
+							if !fp then
+								break
+							endif
+						endif
+					enddo
+				endif
+			endif
+						
+			if !onlyGask eq true then
+				!elen = $!elen + $!len
+			endif
+			
+			if !elen gt 0 then			
+				!!ce = $!item[$!i]
+				!len = $!len + $!elen
+				!this.getBolting(!!ce, !len)
+				--$P $!chain
+			endif
+			
+		enddo
+	enddo
+	!!ce = !me
+endmethod
+
+-- проверяем есть ли болтовой элемент в массиве - если нет, добавляем к массиву, иначе суммируем количество с подобными элементами
+define method .addBoltItem(!bCount is Real, !bDesc is String)
+	!needToAdd = true
+	do !si from 1 to !this.studs.Size()
+		if !this.studs[$!si][2] EQ !bDesc then
+			!needToAdd = false
+			!sum = Real(!this.studs[$!si][1]) + $!bCount
+			!this.studs[$!si][1] = String(!sum)
+		endif		
+	enddo
+	if !needToAdd EQ true then		
+		!index = !this.studs.Size() + 1
+		!this.studs[$!index][1] = !bCount.String()
+		!this.studs[$!index][2] = !bDesc
+	endif
+endmethod
+
+-- определение запаса на резьбу для шпильки
+define method .getExtraLen(!diam is String) is Real
+	!len = 5
+	!count = !this.bxlen.Size() / 2
+	!diam = !diam.Replace('( ', '')
+	!diam = !diam.Replace(' )', '')	
+	do !i from 1 to $!count
+		if (!this.bxlen[$!i] EQ !diam) then
+			!valDia = Real(!this.bxlen[$!i])
+			!valCoef = Real(!this.bxlen[$!i + $!count])
+			!len = !valDia * !valCoef
+		endif
+	enddo
+	!len = !len * 2
+	return !len
+endmethod
+
+-- подсчёт длины шпильки с учётом её диаметра и суммарной толщины элементов, которые соединяет шпилька
+define method .calcBlen(!diam is String, !preLen is Real) is String
+	!res = object Real()
+	!arr = object Array()
+	!lens = object Array()	
+	if !diam.Occurs('mm') gt 0 then
+		!diam = !diam.Replace('mm', ' )')		
+		!diam = '( ' + !diam
+	endif	
+	var !arr collect all SBOL with (Bdiameter eq !diam)
+	--do !i from 1 to !arr.Size()
+		!!ce = $!arr[1]
+		--!!ce = $!arr[$!i]		
+		--!bd = !!ce.Bdiameter
+		--!bd = !bd.Replace('( ','')
+		--!bd = !bd.Replace(' )','')		
+		--if !bd eq !diam then			
+			!len = !this.getExtraLen(!diam)
+			!!ce = !!ce.Nstdblength
+			!lens = !!ce.Blength
+			!len = $!len + $!preLen
+			if !len lt !!ce.Blength[1].Real() then
+				!len = !!ce.Blength[1].Real()
+			endif
+			!min = 0
+			!max = 0
+			!i = 1
+			do !x
+				!min = !!ce.Blength[$!i].Real()
+				if !min eq !len then
+					break
+				endif
+				!i = $!i + 1
+				if !i gt !!ce.Blength.Size() then
+					break
+				endif
+				if !i gt !!ce.Blength.Size() then
+					!len = $!min
+					break
+				endif
+				!max = !!ce.Blength[$!i].Real()
+				if !max eq !len then
+					break
+				endif
+				if !len gt !min and !len lt !max then
+					!dif = $!len - $!min
+					if !dif eq 1 or !dif lt 1 then
+						!len = $!min
+					else
+						!len = $!max
+					endif
+					break
+				endif				
+			enddo
+		--endif
+	--enddo	
+	--$P Bolt Length = $!res
+	--$P_____________			
+	return !len.String()
+endmethod
+
+-- подсчёт суммарной длины гаек и прочих состовляющих
+define method .getBitemLength(!diam is String) is Real
+	!me = !!ce
+	!len = 0
+	var !items collect all SBOL with Bdiameter eq '$!diam'
+	--do !i from 1 to !items.Size()
+		!!ce = $!items[1]
+		handle any
+			!!ce = !me
+			return !len
+		endhandle
+		do !j from 1 to !!ce.Bitems.Size()			
+			--!items[$!index][1] = !!ce.Bitems[$!j]
+			!len = $!len + $!!ce.Bitlength[$!j]			
+		enddo
+	--enddo
+	!!ce = !me	
+	return !len
+endmethod
+
+-- определение, подсчёт и вывод в таблицу крепежа, который содержиться внутри выбранного элемента
+define method .getBolting(!ref is DBREF, !preLen is Real)
+	!me = !!ce
+	!!ce = !ref
+	!bSel = object String()
+	!bDiam = object String()
+	!bCount = object Real()
+	!descArray = object Array()	
+	!bSel = !!ce.Bselector	
+	!!ce = !!ce.Spref	
+	!!ce = !!ce.Catref	
+	if !!ce.Blrfarray.Size() GT 0 then		
+		!!ce = !!ce.Blrfarray[1]
+		!bDiam = !!ce.Bdiameter
+		!bCount = !!ce.Noff
+	endif
+	!!ce = !ref	
+	!this.getBoltDesc(!bDiam, !bSel, !bCount, !preLen)	
+	!!ce = !me	
+endmethod
