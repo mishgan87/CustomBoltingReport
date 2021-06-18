@@ -1,0 +1,52 @@
+-- Составляет список крепежа для текущего элемента и пишет его в документ MS Word
+define function !!BoltReport()
+	VAR !ProjCode PROJ CODE
+	var !UserWork USER
+	var !locCompName evar |computername|
+	var !pathNameOut evar |DFLTS_NET|
+	handle (2,113)
+		$p ERROR : Not found evar DFLTS_NET
+		return
+	endhandle
+	!fileNameOut = !pathNameOut + 'ExpPTES#' + !ProjCode + '#' + !UserWork + '#' + !locCompName + '#hardware.dde'
+	!binf = object BOLTDATA()
+	handle any
+		$p ERROR : Can not initialize bolting data
+		return
+	endhandle
+	!binf.print(!fileNameOut)
+	-- find path to repository of PRG
+	var !locPRGPath evar |ReposDataNET|
+	handle (2,113)
+		$P ERROR : Not found evar ReposDataNET
+		return
+	endhandle
+	!locPRGPath = !locPRGPath + |DESI\E3D\PRG\|
+	var !locOutDocDir evar |OutDocNET|
+	handle (2,113)
+		$P Not found evar OutDocNET
+		return
+	endhandle
+	-- request and create structure for store documetns
+	var !locOutDocDir evar |OutDocNET|
+	handle (2,113)
+		$P Not found evar OutDocNET
+		return
+	endhandle
+	
+	-- request and create structure for store documetns
+	var !locOutDocDir evar |OutDocNET|
+	handle (2,113)
+		$P Not found evar OutDocNET
+		return
+	endhandle
+	!locOutDocDir = !locOutDocDir + |ReportS|
+	syscom |mkdir $!locOutDocDir|
+	!locOutDocDir = !locOutDocDir + |\| + !ProjCode
+	syscom |mkdir $!locOutDocDir|
+	!locOutDocDir = !locOutDocDir + |\ES\| + !locCompName
+	syscom |mkdir $!locOutDocDir|
+	!locStrTemp = !locPRGPath + |EXPer.exe | + !fileNameOut + | | + !locOutDocDir + |\ utf-8| + | &|
+	q var !locStrTemp
+	syscom |$!locStrTemp|
+endfunction
